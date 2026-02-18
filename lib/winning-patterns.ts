@@ -180,10 +180,10 @@ export async function recomputeWinningPatterns(workspaceId: string) {
   // Upsert each pattern
   for (const [hookType, items] of byHookType.entries()) {
     const avgEngRate =
-      items.reduce((sum, i) => sum + (i.snap.engagementRate ?? 0), 0) /
+      items.reduce((sum: number, i) => sum + (i.snap.engagementRate ?? 0), 0) /
       items.length;
     const avgImpressions =
-      items.reduce((sum, i) => sum + (i.snap.impressions ?? 0), 0) /
+      items.reduce((sum: number, i) => sum + (i.snap.impressions ?? 0), 0) /
       items.length;
 
     // Pick up to 5 example texts (truncated to 300 chars)
@@ -196,21 +196,21 @@ export async function recomputeWinningPatterns(workspaceId: string) {
     const featuresList = items.map((i) => extractFeatures(i.post.text));
     const features = {
       avgLengthChars: Math.round(
-        featuresList.reduce((s, f) => s + f.lengthChars, 0) / featuresList.length
+        featuresList.reduce((s: number, f) => s + f.lengthChars, 0) / featuresList.length
       ),
       avgLengthWords: Math.round(
-        featuresList.reduce((s, f) => s + f.lengthWords, 0) / featuresList.length
+        featuresList.reduce((s: number, f) => s + f.lengthWords, 0) / featuresList.length
       ),
       avgBullets: +(
-        featuresList.reduce((s, f) => s + f.bulletCount, 0) / featuresList.length
+        featuresList.reduce((s: number, f) => s + f.bulletCount, 0) / featuresList.length
       ).toFixed(1),
       avgEmojis: +(
-        featuresList.reduce((s, f) => s + f.emojiCount, 0) / featuresList.length
+        featuresList.reduce((s: number, f) => s + f.emojiCount, 0) / featuresList.length
       ).toFixed(1),
       avgLineBreaks: +(
-        featuresList.reduce((s, f) => s + f.lineBreaks, 0) / featuresList.length
+        featuresList.reduce((s: number, f) => s + f.lineBreaks, 0) / featuresList.length
       ).toFixed(1),
-      topCtaTypes: getTopValues(featuresList.map((f) => f.ctaType)),
+      topCtaTypes: getTopValues(featuresList.map((f) => f.ctaType)) as string[],
       hasQuestionPct: +(
         (featuresList.filter((f) => f.hasQuestion).length / featuresList.length) * 100
       ).toFixed(0),

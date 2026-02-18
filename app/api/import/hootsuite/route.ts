@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   parseCsvContent,
@@ -178,7 +179,7 @@ export async function POST(req: NextRequest) {
           updatedCount,
           status: errors.length > 0 && importedCount === 0 ? "FAILED" :
                   errors.length > 0 ? "PARTIAL" : "DONE",
-          errors: errors.length > 0 ? errors : null,
+          errors: errors.length > 0 ? errors : Prisma.JsonNull,
         },
       });
 

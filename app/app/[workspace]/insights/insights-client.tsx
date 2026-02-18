@@ -42,8 +42,8 @@ export default function InsightsClient({ rows }: { rows: Row[] }) {
         ? bv.getTime() - av.getTime()
         : av.getTime() - bv.getTime();
     }
-    const an = typeof av === "number" ? av : new Date(av as string).getTime();
-    const bn = typeof bv === "number" ? bv : new Date(bv as string).getTime();
+    const an = typeof av === "number" ? av : av instanceof Date ? av.getTime() : Number(av);
+    const bn = typeof bv === "number" ? bv : bv instanceof Date ? bv.getTime() : Number(bv);
     return sortDir === "desc" ? bn - an : an - bn;
   });
 
@@ -157,7 +157,7 @@ export default function InsightsClient({ rows }: { rows: Row[] }) {
                   <td className="px-4 py-3">
                     <div className="flex items-start gap-2">
                       {row.isPartial && (
-                        <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0 mt-0.5" title="Delvist data" />
+                        <AlertTriangle className="w-3.5 h-3.5 text-orange-400 flex-shrink-0 mt-0.5" aria-label="Delvist data" />
                       )}
                       <p className="text-sm text-gray-800 line-clamp-2 max-w-sm">
                         {row.text}
