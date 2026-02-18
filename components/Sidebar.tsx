@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Building2,
   Plus,
+  Upload,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -50,6 +51,11 @@ const navItems = [
     label: "Indsigter",
     href: "insights",
     icon: BarChart2,
+  },
+  {
+    label: "Data / Import",
+    href: "import",
+    icon: Upload,
   },
 ];
 

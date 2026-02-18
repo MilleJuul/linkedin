@@ -36,6 +36,20 @@ enum AssetType {
   VIDEO
 }
 
+enum ImportBatchStatus {
+  PROCESSING
+  DONE
+  PARTIAL
+  FAILED
+}
+
+enum InsightTimeframe {
+  SEVEN_DAYS
+  THIRTY_DAYS
+  NINETY_DAYS
+  ALL_TIME
+}
+
 // ─── Models ──────────────────────────────────────────────────────────────────
 
 model User {
@@ -46,13 +60,14 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  memberships   WorkspaceMember[]
-  posts         Post[]            @relation("PostCreatedBy")
-  updatedPosts  Post[]            @relation("PostUpdatedBy")
-  comments      Comment[]
-  auditEvents   AuditEvent[]
-  accounts      Account[]
-  sessions      Session[]
+  memberships    WorkspaceMember[]
+  posts          Post[]            @relation("PostCreatedBy")
+  updatedPosts   Post[]            @relation("PostUpdatedBy")
+  comments       Comment[]
+  auditEvents    AuditEvent[]
+  accounts       Account[]
+  sessions       Session[]
+  importBatches  ImportBatch[]
 }
 
 model Account {
@@ -97,10 +112,14 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members   WorkspaceMember[]
-  brandKit  BrandKit?
-  assets    Asset[]
-  posts     Post[]
+  members         WorkspaceMember[]
+  brandKit        BrandKit?
+  assets          Asset[]
+  posts           Post[]
+  importBatches   ImportBatch[]
+  importedPosts   ImportedPost[]
+  insightAggregates InsightAggregate[]
+  winningPatterns WinningPattern[]
 }
 
 model WorkspaceMember {
@@ -191,4 +210,108 @@ model AuditEvent {
 
   user       User     @relation(fields: [userId], references: [id])
   post       Post?    @relation(fields: [entityId], references: [id], map: "AuditEvent_postId_fkey")
+}
+
+// ─── CSV Import ───────────────────────────────────────────────────────────────
+
+model ImportBatch {
+  id               String            @id @default(cuid())
+  workspaceId      String
+  source           String            @default("hootsuite")
+  uploadedByUserId String
+  uploadedAt       DateTime          @default(now())
+  originalFilename String
+  rowCount         Int               @default(0)
+  importedCount    Int               @default(0)
+  updatedCount     Int               @default(0)
+  status           ImportBatchStatus @default(PROCESSING)
+  errors           Json?
+
+  workspace    Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  uploadedBy   User                 @relation(fields: [uploadedByUserId], references: [id])
+  snapshots    PostMetricSnapshot[]
+
+  @@index([workspaceId])
+  @@index([uploadedAt])
+}
+
+model ImportedPost {
+  id          String   @id @default(cuid())
+  workspaceId String
+  externalId  String?
+  platform    String   @default("linkedin")
+  text        String   @db.Text
+  contentHash String
+  publishedAt DateTime
+  isPartial   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  workspace Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  snapshots PostMetricSnapshot[]
+
+  @@unique([workspaceId, contentHash])
+  @@index([workspaceId])
+  @@index([publishedAt])
+  @@index([workspaceId, publishedAt])
+}
+
+model PostMetricSnapshot {
+  id             String   @id @default(cuid())
+  postId         String
+  batchId        String
+  impressions    Int?
+  likes          Int?
+  comments       Int?
+  shares         Int?
+  clicks         Int?
+  reach          Int?
+  engagementRate Float?
+  ctr            Float?
+  isPartial      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  post  ImportedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  batch ImportBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([batchId])
+  @@index([createdAt])
+}
+
+model InsightAggregate {
+  id                String           @id @default(cuid())
+  workspaceId       String
+  timeframe         InsightTimeframe
+  totalImpressions  Int              @default(0)
+  totalReactions    Int              @default(0)
+  totalComments     Int              @default(0)
+  totalShares       Int              @default(0)
+  totalClicks       Int              @default(0)
+  postCount         Int              @default(0)
+  engagementRateAvg Float            @default(0)
+  ctrAvg            Float            @default(0)
+  deltaVsPrev       Json?
+  generatedAt       DateTime         @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, timeframe])
+  @@index([workspaceId, generatedAt])
+}
+
+model WinningPattern {
+  id             String   @id @default(cuid())
+  workspaceId    String
+  hookType       String
+  avgEngRate     Float    @default(0)
+  avgImpressions Float    @default(0)
+  exampleTexts   String[] @default([])
+  features       Json
+  postCount      Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@unique([workspaceId, hookType])
 }

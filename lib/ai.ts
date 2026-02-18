@@ -1,15 +1,21 @@
 /**
  * AI Service Layer
  *
- * MVP: Alle funktioner returnerer mock data.
+ * MVP: Alle funktioner returnerer mock data med winning patterns indlejret.
  * For at plugge en rigtig LLM ind: erstat implementationerne nedenfor med
  * kald til fx OpenAI, Anthropic eller en anden AI-udbyder.
  *
  * Interface er designet til nem udskiftning – skift kun function bodies,
  * ikke signaturer.
+ *
+ * "Continuous learning" sker ved at:
+ *  1. recomputeWinningPatterns() køres efter hvert CSV-import
+ *  2. getWinningPatternSummary() bruges her til at kontekstualisere prompts
+ *  3. I produktion sendes patterns + eksempel-tekster til LLM-prompten
  */
 
 import { BrandKit, Asset } from "@prisma/client";
+import type { WinningPatternSummary } from "./winning-patterns";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,12 +43,14 @@ export interface WeeklyPlanInput {
   cadence: number; // posts per week
   themes?: string[];
   startDate?: Date;
+  winningPatterns?: WinningPatternSummary[]; // injected from DB after CSV import
 }
 
 export interface PostCopyInput {
   brandKit: Partial<BrandKit>;
   postIdea: string;
   selectedAssets?: Partial<Asset>[];
+  winningPatterns?: WinningPatternSummary[]; // injected from DB after CSV import
 }
 
 export interface AssetMatchInput {
@@ -121,8 +129,11 @@ const MOCK_IDEAS = [
 /**
  * Genererer en ugentlig indholdplan baseret på brand kit og kadence.
  *
- * TODO (production): Erstat med LLM-kald der bruger brandKit + pastPostsSummary
- * til at generere kontekst-bevidste forslag.
+ * Bruger winning patterns (fra CSV-import) til at prioritere de formater
+ * der historisk performer bedst i workspacet.
+ *
+ * TODO (production): Erstat med LLM-kald der bruger brandKit + patterns +
+ * eksempel-tekster til at generere kontekst-bevidste forslag.
  */
 export async function generateWeeklyPlan(
   input: WeeklyPlanInput
@@ -137,6 +148,20 @@ export async function generateWeeklyPlan(
     input.themes && input.themes.length > 0
       ? input.themes
       : ["thought leadership", "case study", "tips & tricks"];
+
+  // Winning patterns context – bruges i produktion til LLM-prompt
+  const patternContext = input.winningPatterns?.length
+    ? `\n\nBedst performende formater i dit workspace:\n${input.winningPatterns
+        .slice(0, 3)
+        .map(
+          (p) =>
+            `- ${p.hookType}: ${p.avgEngRate} eng. rate (${p.avgImpressions} visn. i snit)`
+        )
+        .join("\n")}`
+    : "";
+
+  // Prioriter formater baseret på winning patterns
+  const topHookType = input.winningPatterns?.[0]?.hookType ?? "";
 
   // Fordel posts jævnt over ugen
   const daysInWeek = 7;
@@ -155,9 +180,15 @@ export async function generateWeeklyPlan(
     const idea = MOCK_IDEAS[ideaIndex];
     const theme = themes[i % themes.length];
 
+    // Lad første post matche top-performing format hvis tilgængeligt
+    const patternNote =
+      i === 0 && topHookType
+        ? ` [Anbefalet format baseret på dine data: ${topHookType}]`
+        : "";
+
     drafts.push({
-      title: `[${theme}] ${idea.title}`,
-      postIdea: idea.postIdea,
+      title: `[${theme}] ${idea.title}${patternNote}`,
+      postIdea: idea.postIdea + patternContext,
       format: idea.format,
       suggestedDay: suggestedDate.toISOString(),
       hook: MOCK_HOOKS[i % MOCK_HOOKS.length],
@@ -169,10 +200,13 @@ export async function generateWeeklyPlan(
 }
 
 /**
- * Genererer post-tekst (hook, body, CTA, hashtags) baseret på brand kit og idé.
+ * Genererer post-tekst (hook, body, CTA, hashtags) baseret på brand kit, idé og winning patterns.
  *
- * TODO (production): Erstat med LLM-prompt der bruger brandKit.toneOfVoice,
- * doWords, dontWords og postIdea til at generere on-brand copy.
+ * TODO (production): Erstat med LLM-prompt der bruger:
+ *   - brandKit.toneOfVoice, doWords, dontWords
+ *   - postIdea + selectedAssets
+ *   - winningPatterns.exampleTexts (3-5 konkrete eksempler fra top posts)
+ *   - winningPatterns features (foretrukken hook-type, længde, struktur)
  */
 export async function generatePostCopy(input: PostCopyInput): Promise<PostCopy> {
   // Simuler async AI-kald
@@ -181,14 +215,32 @@ export async function generatePostCopy(input: PostCopyInput): Promise<PostCopy> 
   const brandKeywords = input.brandKit.doWords ?? ["indsigt", "vækst", "resultater"];
   const tone = input.brandKit.toneOfVoice ?? "professionel og direkte";
 
-  // Mock: Generer simpel struktur baseret på input
-  const hook = `${MOCK_HOOKS[Math.floor(Math.random() * MOCK_HOOKS.length)]}`;
+  // Brug top winning pattern til at farve hook-stilen
+  const topPattern = input.winningPatterns?.[0];
+  const hookStyle = topPattern
+    ? `(Brug "${topPattern.hookType}"-format der performer med ${topPattern.avgEngRate} eng. rate)`
+    : "";
 
-  const bodyText = `${input.postIdea}\n\nBaseret på vores erfaring og ${brandKeywords[0]}-tilgang:\n\n✅ Første indsigt relateret til emnet\n✅ Anden ${brandKeywords[1]}-drevet observation\n✅ Tredje konkrete anbefaling\n\n[Uddyb med specifik data og eksempler der passer til '${tone}'-tonen]`;
+  // Mock: Generer simpel struktur baseret på input
+  const hook = `${MOCK_HOOKS[Math.floor(Math.random() * MOCK_HOOKS.length)]} ${hookStyle}`.trim();
+
+  // Inkluder eksempel fra winning patterns i body (vises som reference i produktion)
+  const exampleNote =
+    topPattern?.exampleTexts?.[0]
+      ? `\n\n💡 [Reference fra top-performing post]:\n"${topPattern.exampleTexts[0].slice(0, 150)}…"`
+      : "";
+
+  const bodyText =
+    `${input.postIdea}\n\nBaseret på vores erfaring og ${brandKeywords[0]}-tilgang:\n\n` +
+    `✅ Første indsigt relateret til emnet\n` +
+    `✅ Anden ${brandKeywords[1]}-drevet observation\n` +
+    `✅ Tredje konkrete anbefaling\n\n` +
+    `[Uddyb med specifik data og eksempler der passer til '${tone}'-tonen]` +
+    exampleNote;
 
   const cta =
     input.brandKit.ctaStyle ||
-    "Hvad er din erfaring? Del din tanker i kommentarerne 👇";
+    "Hvad er din erfaring? Del dine tanker i kommentarerne 👇";
 
   const hashtags = ["#LinkedIn", "#B2BMarketing", "#ContentStrategy", "#Vækst"].slice(0, 4);
 

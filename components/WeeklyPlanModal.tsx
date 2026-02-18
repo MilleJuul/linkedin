@@ -5,6 +5,7 @@ import Modal from "./ui/Modal";
 import Button from "./ui/Button";
 import { generateWeeklyPlan } from "@/lib/ai";
 import { createPostsFromWeeklyPlan } from "@/actions/posts";
+import { getWinningPatternSummary } from "@/lib/winning-patterns";
 import { formatDate } from "@/lib/utils";
 import { Loader2, Wand2, Plus, Calendar } from "lucide-react";
 
@@ -42,12 +43,24 @@ export default function WeeklyPlanModal({
       .filter(Boolean);
 
     startTransition(async () => {
+      // Hent winning patterns fra DB så AI'en kan lære af performance
+      let winningPatterns;
+      try {
+        // getWinningPatternSummary kræver workspaceId – her bruger vi slug
+        // I produktion: hent workspace.id fra slug og kald med id
+        const res = await fetch(`/api/winning-patterns?workspace=${workspaceSlug}`);
+        if (res.ok) winningPatterns = await res.json();
+      } catch {
+        // Ignorer fejl – fortsæt uden patterns
+      }
+
       const result = await generateWeeklyPlan({
         brandKit: {},
         pastPostsSummary: "",
         cadence,
         themes: themeList,
         startDate: new Date(),
+        winningPatterns: winningPatterns ?? [],
       });
       setDrafts(result);
       setStep("preview");
