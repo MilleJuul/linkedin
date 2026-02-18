@@ -1,0 +1,194 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  ADMIN
+  EDITOR
+  APPROVER
+}
+
+enum PostStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+}
+
+enum Platform {
+  LINKEDIN
+}
+
+enum AssetType {
+  IMAGE
+  VIDEO
+}
+
+// ─── Models ──────────────────────────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  name          String?
+  passwordHash  String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  memberships   WorkspaceMember[]
+  posts         Post[]            @relation("PostCreatedBy")
+  updatedPosts  Post[]            @relation("PostUpdatedBy")
+  comments      Comment[]
+  auditEvents   AuditEvent[]
+  accounts      Account[]
+  sessions      Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   WorkspaceMember[]
+  brandKit  BrandKit?
+  assets    Asset[]
+  posts     Post[]
+}
+
+model WorkspaceMember {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  role        Role      @default(EDITOR)
+  joinedAt    DateTime  @default(now())
+
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+}
+
+model BrandKit {
+  id            String   @id @default(cuid())
+  workspaceId   String   @unique
+  toneOfVoice   String   @default("")
+  doWords       String[] @default([])
+  dontWords     String[] @default([])
+  ctaStyle      String   @default("")
+  hashtagStyle  String   @default("")
+  emojiPolicy   String   @default("")
+  examples      String[] @default([])
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Asset {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  type         AssetType @default(IMAGE)
+  url          String
+  thumbnailUrl String?
+  filename     String
+  tags         String[]  @default([])
+  createdAt    DateTime  @default(now())
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model Post {
+  id          String     @id @default(cuid())
+  workspaceId String
+  title       String
+  status      PostStatus @default(DRAFT)
+  platform    Platform   @default(LINKEDIN)
+  scheduledAt DateTime?
+  bodyText    String     @default("")
+  hook        String     @default("")
+  cta         String     @default("")
+  hashtags    String[]   @default([])
+  assetIds    String[]   @default([])
+  createdById String
+  updatedById String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  workspace   Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy   User       @relation("PostCreatedBy", fields: [createdById], references: [id])
+  updatedBy   User?      @relation("PostUpdatedBy", fields: [updatedById], references: [id])
+  comments    Comment[]
+  auditEvents AuditEvent[]
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  action     String
+  userId     String
+  createdAt  DateTime @default(now())
+  diffJson   Json?
+
+  user       User     @relation(fields: [userId], references: [id])
+  post       Post?    @relation(fields: [entityId], references: [id], map: "AuditEvent_postId_fkey")
+}
