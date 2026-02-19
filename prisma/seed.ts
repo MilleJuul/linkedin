@@ -1,4 +1,4 @@
-import { PrismaClient, AssetType, PostStatus, Platform, Role } from "@prisma/client";
+import { PrismaClient, PostStatus, Platform, Role } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -105,50 +105,10 @@ async function main() {
 
   console.log("✅ Brand Kit oprettet");
 
-  // ── Assets ────────────────────────────────────────────────────────────────
-  const assetData = [
-    { filename: "team-meeting.jpg", type: AssetType.IMAGE, tags: ["team", "møde", "kontor", "samarbejde"] },
-    { filename: "data-dashboard.jpg", type: AssetType.IMAGE, tags: ["data", "analyse", "dashboard", "analytics"] },
-    { filename: "growth-chart.jpg", type: AssetType.IMAGE, tags: ["vækst", "graf", "resultater", "KPI"] },
-    { filename: "coffee-laptop.jpg", type: AssetType.IMAGE, tags: ["kontor", "arbejde", "laptop", "lifestyle"] },
-    { filename: "handshake.jpg", type: AssetType.IMAGE, tags: ["samarbejde", "partner", "aftale", "B2B"] },
-    { filename: "presentation.jpg", type: AssetType.IMAGE, tags: ["præsentation", "slides", "møde", "pitch"] },
-    { filename: "remote-work.jpg", type: AssetType.IMAGE, tags: ["remote", "hjemmekontor", "fleksibel", "arbejde"] },
-    { filename: "strategy-board.jpg", type: AssetType.IMAGE, tags: ["strategi", "planlægning", "whiteboard", "innovation"] },
-    { filename: "marketing-team.jpg", type: AssetType.IMAGE, tags: ["marketing", "team", "kreativ", "brainstorm"] },
-    { filename: "product-demo.jpg", type: AssetType.IMAGE, tags: ["produkt", "demo", "præsentation", "SaaS"] },
-    { filename: "linkedin-post-tips.jpg", type: AssetType.IMAGE, tags: ["LinkedIn", "tips", "content", "social media"] },
-    { filename: "b2b-leads.jpg", type: AssetType.IMAGE, tags: ["B2B", "leads", "salg", "pipeline"] },
-    { filename: "branding-workshop.jpg", type: AssetType.IMAGE, tags: ["branding", "workshop", "identitet", "kreativ"] },
-    { filename: "success-celebration.jpg", type: AssetType.IMAGE, tags: ["succes", "fejring", "milestone", "win"] },
-    { filename: "analytics-report.jpg", type: AssetType.IMAGE, tags: ["analytics", "rapport", "data", "indsigt"] },
-    { filename: "intro-video.mp4", type: AssetType.VIDEO, tags: ["intro", "virksomhed", "video", "præsentation"] },
-    { filename: "case-study.mp4", type: AssetType.VIDEO, tags: ["case study", "kunde", "succes", "testimonial"] },
-    { filename: "product-walkthrough.mp4", type: AssetType.VIDEO, tags: ["produkt", "demo", "tutorial", "SaaS"] },
-    { filename: "team-culture.mp4", type: AssetType.VIDEO, tags: ["team", "kultur", "employer branding", "people"] },
-    { filename: "webinar-highlight.mp4", type: AssetType.VIDEO, tags: ["webinar", "event", "uddannelse", "insights"] },
-  ];
+  // Assets seedes ikke – biblioteket er tomt fra start og fyldes via Upload-modalens rigtige filer.
+  const assets: { id: string }[] = [];
 
-  const assets = await Promise.all(
-    assetData.map((asset, index) => {
-      const seed = index + 1;
-      const isVideo = asset.type === AssetType.VIDEO;
-      return prisma.asset.create({
-        data: {
-          workspaceId: workspace.id,
-          type: asset.type,
-          filename: asset.filename,
-          url: isVideo
-            ? `https://picsum.photos/seed/${seed}/800/450`
-            : `https://picsum.photos/seed/${seed}/800/600`,
-          thumbnailUrl: `https://picsum.photos/seed/${seed}/400/300`,
-          tags: asset.tags,
-        },
-      });
-    })
-  );
-
-  console.log(`✅ ${assets.length} assets oprettet`);
+  console.log(`✅ Assets: ingen seed-data (biblioteket startes tomt)`);
 
   // ── Posts ─────────────────────────────────────────────────────────────────
   const now = new Date();
@@ -162,7 +122,7 @@ async function main() {
       cta: "Kommentér nedenfor eller send os en DM",
       hashtags: ["#LinkedInMarketing", "#B2BMarketing", "#ContentStrategy", "#SocialSelling"],
       scheduledAt: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[0].id, assets[1].id],
+      assetIds: [],
     },
     {
       title: "Sådan bruger du data til at booste dit LinkedIn-reach",
@@ -173,7 +133,7 @@ async function main() {
       cta: "Skriv JA i kommentarerne hvis du poster konsekvent",
       hashtags: ["#DataDrivenMarketing", "#LinkedInTips", "#ContentMarketing"],
       scheduledAt: new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[1].id, assets[2].id],
+      assetIds: [],
     },
     {
       title: "Vi hjalp en SaaS-startup med at 3x'e deres leads",
@@ -184,7 +144,7 @@ async function main() {
       cta: "Drop en kommentar for at se den fulde case study",
       hashtags: ["#CaseStudy", "#B2BSaaS", "#LeadGeneration", "#LinkedInStrategy", "#GrowthMarketing"],
       scheduledAt: new Date(now.getTime() + 1 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[4].id, assets[14].id],
+      assetIds: [],
     },
     {
       title: "Den vigtigste LinkedIn-metric du ikke måler",
@@ -195,7 +155,7 @@ async function main() {
       cta: "Del dit SSI-score i kommentarerne",
       hashtags: ["#SocialSelling", "#LinkedInSSI", "#SalesStrategy", "#B2BMarketing"],
       scheduledAt: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[2].id],
+      assetIds: [],
     },
     {
       title: "5 LinkedIn-hooks der åbner op for algoritmen",
@@ -206,7 +166,7 @@ async function main() {
       cta: "Gem dette opslag og fortæl os hvilken hook du bruger",
       hashtags: ["#LinkedInTips", "#Copywriting", "#ContentCreation", "#PersonalBranding"],
       scheduledAt: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[10].id],
+      assetIds: [],
     },
     {
       title: "Thought leadership vs. salgsindhold – den rigtige balance",
@@ -217,7 +177,7 @@ async function main() {
       cta: "Hvad er din thought leadership-balance? Del i kommentarerne",
       hashtags: ["#ThoughtLeadership", "#ContentStrategy", "#B2BMarketing", "#PersonalBranding"],
       scheduledAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[7].id, assets[8].id],
+      assetIds: [],
     },
     {
       title: "Hvorfor dit LinkedIn-indhold ikke konverterer",
@@ -239,7 +199,7 @@ async function main() {
       cta: "Kontakt os for at høre mere",
       hashtags: ["#CaseStudy", "#ContentMarketing", "#ROI"],
       scheduledAt: null,
-      assetIds: [assets[14].id],
+      assetIds: [],
     },
     {
       title: "Den komplette guide til LinkedIn-hashtags i 2025",
@@ -261,7 +221,7 @@ async function main() {
       cta: "Del din erfaring med employee advocacy",
       hashtags: ["#EmployeeAdvocacy", "#EmployerBranding", "#LinkedInMarketing"],
       scheduledAt: new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000),
-      assetIds: [assets[3].id, assets[18].id],
+      assetIds: [],
     },
   ];
 
