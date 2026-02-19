@@ -68,19 +68,27 @@ export default function UploadModal({
   async function handleUpload() {
     startTransition(async () => {
       for (const item of previews) {
+        // 1. Upload the actual file to Vercel Blob storage
+        const uploadForm = new FormData();
+        uploadForm.set("file", item.file);
+        const uploadRes = await fetch("/api/upload", {
+          method: "POST",
+          body: uploadForm,
+        });
+
+        if (!uploadRes.ok) {
+          const err = await uploadRes.json().catch(() => ({}));
+          console.error("Upload fejlede:", err);
+          continue;
+        }
+
+        const { url, thumbnailUrl } = await uploadRes.json();
+
+        // 2. Save asset record with the real URL
         const formData = new FormData();
-        // I MVP bruger vi Picsum som placeholder URL
-        // I produktion: upload fil til storage og brug den rigtige URL
-        const seed = Math.floor(Math.random() * 1000);
         formData.set("filename", item.file.name);
-        formData.set(
-          "url",
-          `https://picsum.photos/seed/${seed}/800/600`
-        );
-        formData.set(
-          "thumbnailUrl",
-          `https://picsum.photos/seed/${seed}/400/300`
-        );
+        formData.set("url", url);
+        formData.set("thumbnailUrl", thumbnailUrl ?? url);
         formData.set("type", item.type);
         formData.set("tags", item.tags);
         await createAsset(workspaceSlug, formData);

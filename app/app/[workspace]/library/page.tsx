@@ -1,5 +1,6 @@
 import { requireWorkspaceAccess } from "@/actions/workspace";
 import { getAssetsForWorkspace } from "@/actions/assets";
+import { getContentSourcesForWorkspace } from "@/actions/content-sources";
 import LibraryClient from "./library-client";
 
 export default async function LibraryPage({
@@ -10,9 +11,11 @@ export default async function LibraryPage({
   const { workspace: workspaceSlug } = await params;
   await requireWorkspaceAccess(workspaceSlug);
 
-  const assets = await getAssetsForWorkspace(workspaceSlug);
+  const [assets, contentSources] = await Promise.all([
+    getAssetsForWorkspace(workspaceSlug),
+    getContentSourcesForWorkspace(workspaceSlug),
+  ]);
 
-  // Collect all unique tags
   const allTags = Array.from(
     new Set(assets.flatMap((a) => a.tags))
   ).sort();
@@ -21,6 +24,7 @@ export default async function LibraryPage({
     <LibraryClient
       assets={assets}
       allTags={allTags}
+      contentSources={contentSources}
       workspaceSlug={workspaceSlug}
     />
   );

@@ -112,14 +112,15 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  members         WorkspaceMember[]
-  brandKit        BrandKit?
-  assets          Asset[]
-  posts           Post[]
-  importBatches   ImportBatch[]
-  importedPosts   ImportedPost[]
+  members           WorkspaceMember[]
+  brandKit          BrandKit?
+  assets            Asset[]
+  contentSources    ContentSource[]
+  posts             Post[]
+  importBatches     ImportBatch[]
+  importedPosts     ImportedPost[]
   insightAggregates InsightAggregate[]
-  winningPatterns WinningPattern[]
+  winningPatterns   WinningPattern[]
 }
 
 model WorkspaceMember {
@@ -162,6 +163,21 @@ model Asset {
   createdAt    DateTime  @default(now())
 
   workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+model ContentSource {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  title         String
+  filename      String
+  fileType      String   // "pdf", "txt", "md"
+  extractedText String   @db.Text
+  tags          String[] @default([])
+  createdAt     DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
 }
 
 model Post {
