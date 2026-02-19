@@ -46,5 +46,8 @@ export async function POST(request: Request) {
     addRandomSuffix: true,
   });
 
-  return NextResponse.json({ url: blob.url, thumbnailUrl: blob.url });
+  // Videos cannot be rendered as image thumbnails – return null so the UI
+  // shows the video-icon placeholder instead of a broken image.
+  const isVideo = file.type.startsWith("video/");
+  return NextResponse.json({ url: blob.url, thumbnailUrl: isVideo ? null : blob.url });
 }

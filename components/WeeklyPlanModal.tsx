@@ -5,9 +5,8 @@ import Modal from "./ui/Modal";
 import Button from "./ui/Button";
 import { generateWeeklyPlan } from "@/lib/ai";
 import { createPostsFromWeeklyPlan } from "@/actions/posts";
-import { getWinningPatternSummary } from "@/lib/winning-patterns";
 import { formatDate } from "@/lib/utils";
-import { Loader2, Wand2, Plus, Calendar } from "lucide-react";
+import { Loader2, Wand2, Plus, Calendar, Info } from "lucide-react";
 
 interface WeeklyPlanModalProps {
   open: boolean;
@@ -31,7 +30,10 @@ export default function WeeklyPlanModal({
       format: string;
       suggestedDay: string;
       hook?: string;
+      cta?: string;
       hashtags?: string[];
+      rationale?: string;
+      oneLiner?: string;
     }[]
   >([]);
   const [success, setSuccess] = useState(false);
@@ -43,24 +45,11 @@ export default function WeeklyPlanModal({
       .filter(Boolean);
 
     startTransition(async () => {
-      // Hent winning patterns fra DB så AI'en kan lære af performance
-      let winningPatterns;
-      try {
-        // getWinningPatternSummary kræver workspaceId – her bruger vi slug
-        // I produktion: hent workspace.id fra slug og kald med id
-        const res = await fetch(`/api/winning-patterns?workspace=${workspaceSlug}`);
-        if (res.ok) winningPatterns = await res.json();
-      } catch {
-        // Ignorer fejl – fortsæt uden patterns
-      }
-
       const result = await generateWeeklyPlan({
-        brandKit: {},
-        pastPostsSummary: "",
+        workspaceSlug,
         cadence,
         themes: themeList,
-        startDate: new Date(),
-        winningPatterns: winningPatterns ?? [],
+        startDate: new Date().toISOString(),
       });
       setDrafts(result);
       setStep("preview");
@@ -89,12 +78,7 @@ export default function WeeklyPlanModal({
   };
 
   return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Generér ugeplan"
-      size="lg"
-    >
+    <Modal open={open} onClose={onClose} title="Generér ugeplan" size="lg">
       <div className="p-6">
         {step === "form" && (
           <div className="space-y-6">
@@ -106,8 +90,8 @@ export default function WeeklyPlanModal({
                     AI-drevet ugeplan
                   </p>
                   <p className="text-sm text-purple-700">
-                    Fortæl AI om din kadence og temaer, og få forslag til
-                    næste uges posts som kladder i dit workflow.
+                    AI bruger dit brand kit, performance-mønstre og vidensbase til at
+                    generere konkrete post-forslag til næste uge.
                   </p>
                 </div>
               </div>
@@ -156,11 +140,7 @@ export default function WeeklyPlanModal({
               <Button variant="outline" size="md" onClick={onClose}>
                 Annuller
               </Button>
-              <Button
-                size="md"
-                onClick={handleGenerate}
-                disabled={isPending}
-              >
+              <Button size="md" onClick={handleGenerate} disabled={isPending}>
                 {isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
@@ -180,34 +160,47 @@ export default function WeeklyPlanModal({
         {step === "preview" && (
           <div className="space-y-4">
             <p className="text-sm text-gray-600">
-              AI har foreslået {drafts.length} posts til næste uge. Gennemgå
-              forslagene og opret dem som kladder.
+              AI har foreslået {drafts.length} posts. Gennemgå forslagene og opret dem som kladder.
             </p>
 
-            <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
               {drafts.map((draft, i) => (
                 <div
-                  key={i}
+                  key={`${draft.suggestedDay}-${i}`}
                   className="border border-gray-200 rounded-xl p-4 hover:border-blue-200 transition"
                 >
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <h4 className="text-sm font-semibold text-gray-900">
                       {draft.title}
                     </h4>
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-md">
-                        {FORMAT_LABELS[draft.format] ?? draft.format}
-                      </span>
-                    </div>
+                    <span className="bg-gray-100 text-gray-600 text-xs px-2 py-0.5 rounded-md flex-shrink-0">
+                      {FORMAT_LABELS[draft.format] ?? draft.format}
+                    </span>
                   </div>
+
                   <p className="text-xs text-gray-500 mb-2 line-clamp-2">
                     {draft.postIdea}
                   </p>
+
                   {draft.hook && (
-                    <p className="text-xs text-blue-600 italic mb-2">
+                    <p className="text-xs text-blue-600 italic mb-2 bg-blue-50 px-2 py-1.5 rounded">
                       &ldquo;{draft.hook}&rdquo;
                     </p>
                   )}
+
+                  {draft.oneLiner && (
+                    <p className="text-xs text-purple-700 italic mb-2 bg-purple-50 px-2 py-1.5 rounded">
+                      One-liner: &ldquo;{draft.oneLiner}&rdquo;
+                    </p>
+                  )}
+
+                  {draft.rationale && (
+                    <div className="flex gap-1.5 text-xs text-gray-500 bg-gray-50 px-2 py-1.5 rounded mb-2">
+                      <Info className="w-3 h-3 flex-shrink-0 mt-0.5 text-gray-400" />
+                      <span>{draft.rationale}</span>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-1 text-xs text-gray-400">
                     <Calendar className="w-3 h-3" />
                     <span>Foreslår: {formatDate(draft.suggestedDay)}</span>
@@ -223,11 +216,7 @@ export default function WeeklyPlanModal({
             )}
 
             <div className="flex justify-between gap-2 pt-2 border-t border-gray-100">
-              <Button
-                variant="ghost"
-                size="md"
-                onClick={() => setStep("form")}
-              >
+              <Button variant="ghost" size="md" onClick={() => setStep("form")}>
                 ← Generer igen
               </Button>
               <Button

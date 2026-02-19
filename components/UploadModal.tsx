@@ -10,9 +10,12 @@ interface UploadModalProps {
   open: boolean;
   onClose: () => void;
   workspaceSlug: string;
+  /** Called after all files have been successfully saved to DB */
+  onUploaded?: () => void;
 }
 
 interface FilePreview {
+  id: string; // stable unique key – avoids index-key bug when removing items
   file: File;
   preview: string;
   type: "IMAGE" | "VIDEO";
@@ -23,6 +26,7 @@ export default function UploadModal({
   open,
   onClose,
   workspaceSlug,
+  onUploaded,
 }: UploadModalProps) {
   const [isPending, startTransition] = useTransition();
   const [previews, setPreviews] = useState<FilePreview[]>([]);
@@ -34,6 +38,7 @@ export default function UploadModal({
     const newPreviews: FilePreview[] = arr
       .filter((f) => f.type.startsWith("image/") || f.type.startsWith("video/"))
       .map((f) => ({
+        id: `${f.name}-${f.size}-${f.lastModified}`,
         file: f,
         preview: URL.createObjectURL(f),
         type: f.type.startsWith("video/") ? "VIDEO" : "IMAGE",
@@ -52,23 +57,24 @@ export default function UploadModal({
     if (e.target.files) addFiles(e.target.files);
   }
 
-  function removePreview(index: number) {
+  function removePreview(id: string) {
     setPreviews((prev) => {
-      URL.revokeObjectURL(prev[index].preview);
-      return prev.filter((_, i) => i !== index);
+      const item = prev.find((p) => p.id === id);
+      if (item) URL.revokeObjectURL(item.preview);
+      return prev.filter((p) => p.id !== id);
     });
   }
 
-  function updateTags(index: number, tags: string) {
+  function updateTags(id: string, tags: string) {
     setPreviews((prev) =>
-      prev.map((p, i) => (i === index ? { ...p, tags } : p))
+      prev.map((p) => (p.id === id ? { ...p, tags } : p))
     );
   }
 
   async function handleUpload() {
     startTransition(async () => {
       for (const item of previews) {
-        // 1. Upload the actual file to Vercel Blob storage
+        // 1. Upload file to Vercel Blob
         const uploadForm = new FormData();
         uploadForm.set("file", item.file);
         const uploadRes = await fetch("/api/upload", {
@@ -88,15 +94,18 @@ export default function UploadModal({
         const formData = new FormData();
         formData.set("filename", item.file.name);
         formData.set("url", url);
-        formData.set("thumbnailUrl", thumbnailUrl ?? url);
+        formData.set("thumbnailUrl", thumbnailUrl ?? "");
         formData.set("type", item.type);
         formData.set("tags", item.tags);
         await createAsset(workspaceSlug, formData);
       }
+
       setSuccess(true);
       setTimeout(() => {
+        previews.forEach((p) => URL.revokeObjectURL(p.preview));
         setPreviews([]);
         setSuccess(false);
+        onUploaded?.();
         onClose();
       }, 1200);
     });
@@ -151,9 +160,9 @@ export default function UploadModal({
               {previews.length} fil{previews.length > 1 ? "er" : ""} klar til upload
             </h4>
             <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
-              {previews.map((item, i) => (
+              {previews.map((item) => (
                 <div
-                  key={i}
+                  key={item.id}
                   className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl"
                 >
                   {/* Thumbnail */}
@@ -178,7 +187,7 @@ export default function UploadModal({
                     </p>
                     <input
                       value={item.tags}
-                      onChange={(e) => updateTags(i, e.target.value)}
+                      onChange={(e) => updateTags(item.id, e.target.value)}
                       placeholder="Tags (kommasepareret)..."
                       className="w-full px-2 py-1 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
@@ -195,7 +204,7 @@ export default function UploadModal({
 
                   {/* Remove */}
                   <button
-                    onClick={() => removePreview(i)}
+                    onClick={() => removePreview(item.id)}
                     className="flex-shrink-0 p-1 hover:bg-gray-200 rounded transition"
                   >
                     <X className="w-4 h-4 text-gray-400" />

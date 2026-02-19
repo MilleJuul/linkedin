@@ -1,23 +1,26 @@
+"use server";
+
 /**
- * AI Service Layer
+ * AI Service Layer – powered by OpenAI (gpt-4o-mini).
  *
- * MVP: Alle funktioner returnerer mock data med winning patterns indlejret.
- * For at plugge en rigtig LLM ind: erstat implementationerne nedenfor med
- * kald til fx OpenAI, Anthropic eller en anden AI-udbyder.
+ * If OPENAI_API_KEY is not set the functions fall back to quality mock data
+ * so the app stays functional without a key.
  *
- * Interface er designet til nem udskiftning – skift kun function bodies,
- * ikke signaturer.
+ * Context fed to the LLM:
+ *  • Brand kit  (tone, do/don't words, CTA style, examples)
+ *  • Winning patterns (top hook types + engagement stats + example texts)
+ *  • Content sources (first 500 chars per doc – keyword retrieved)
+ *  • Asset metadata (filename + tags, for asset matching)
  *
- * "Continuous learning" sker ved at:
- *  1. recomputeWinningPatterns() køres efter hvert CSV-import
- *  2. getWinningPatternSummary() bruges her til at kontekstualisere prompts
- *  3. I produktion sendes patterns + eksempel-tekster til LLM-prompten
+ * Web research: not implemented. The model is instructed to avoid
+ * unverifiable statistics and rely only on the user's own data.
  */
 
-import { BrandKit, Asset } from "@prisma/client";
-import type { WinningPatternSummary } from "./winning-patterns";
+import { Asset } from "@prisma/client";
+import { prisma } from "./db";
+import { getWinningPatternSummary, WinningPatternSummary } from "./winning-patterns";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface PostDraft {
   title: string;
@@ -28,6 +31,25 @@ export interface PostDraft {
   bodyText?: string;
   cta?: string;
   hashtags?: string[];
+  /** Why this post should perform well based on performance data. */
+  rationale?: string;
+  /** Citable one-liner from the post concept. */
+  oneLiner?: string;
+}
+
+export interface PostSuggestion {
+  hook: string;
+  bodyText: string;
+  cta: string;
+  hashtags: string[];
+  /** Why this variation should perform well. */
+  rationale: string;
+  /** Citable one-liner. */
+  oneLiner: string;
+  /** Top asset recommendations (up to 3). */
+  recommendedAssets: { assetId: string; reason: string }[];
+  /** Visual concepts if no matching assets are available. */
+  visualConcepts: string[];
 }
 
 export interface PostCopy {
@@ -37,20 +59,17 @@ export interface PostCopy {
   hashtags: string[];
 }
 
+// Serialisable inputs (no Date objects – use ISO strings instead)
 export interface WeeklyPlanInput {
-  brandKit: Partial<BrandKit>;
-  pastPostsSummary: string;
-  cadence: number; // posts per week
+  workspaceSlug: string;
+  cadence: number;
   themes?: string[];
-  startDate?: Date;
-  winningPatterns?: WinningPatternSummary[]; // injected from DB after CSV import
+  startDate?: string; // ISO string
 }
 
-export interface PostCopyInput {
-  brandKit: Partial<BrandKit>;
+export interface PostSuggestionsInput {
+  workspaceSlug: string;
   postIdea: string;
-  selectedAssets?: Partial<Asset>[];
-  winningPatterns?: WinningPatternSummary[]; // injected from DB after CSV import
 }
 
 export interface AssetMatchInput {
@@ -58,7 +77,350 @@ export interface AssetMatchInput {
   assets: Partial<Asset>[];
 }
 
-// ─── Mock Data Helpers ────────────────────────────────────────────────────────
+// Legacy input kept for backward compat
+export interface WeeklyPlanLegacyInput {
+  brandKit: Partial<Record<string, unknown>>;
+  pastPostsSummary: string;
+  cadence: number;
+  themes?: string[];
+  startDate?: Date;
+  winningPatterns?: WinningPatternSummary[];
+}
+
+export interface PostCopyInput {
+  brandKit: Partial<Record<string, unknown>>;
+  postIdea: string;
+  selectedAssets?: Partial<Asset>[];
+  winningPatterns?: WinningPatternSummary[];
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+async function fetchWorkspaceContext(workspaceSlug: string) {
+  const workspace = await prisma.workspace.findUnique({
+    where: { slug: workspaceSlug },
+    include: { brandKit: true },
+  });
+  if (!workspace) throw new Error("Workspace ikke fundet");
+
+  const [patterns, contentSources, assets] = await Promise.all([
+    getWinningPatternSummary(workspace.id),
+    prisma.contentSource.findMany({
+      where: { workspaceId: workspace.id },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { title: true, extractedText: true, tags: true },
+    }),
+    prisma.asset.findMany({
+      where: { workspaceId: workspace.id },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { id: true, filename: true, type: true, tags: true },
+    }),
+  ]);
+
+  return { workspace, brandKit: workspace.brandKit, patterns, contentSources, assets };
+}
+
+function brandKitBlock(bk: Record<string, unknown> | null): string {
+  if (!bk) return "Intet brand kit konfigureret – brug professionel B2B-tone.";
+  const lines: string[] = [];
+  if (bk.toneOfVoice) lines.push(`Tone: ${bk.toneOfVoice}`);
+  if (Array.isArray(bk.doWords) && bk.doWords.length)
+    lines.push(`Brug: ${(bk.doWords as string[]).join(", ")}`);
+  if (Array.isArray(bk.dontWords) && bk.dontWords.length)
+    lines.push(`Undgå: ${(bk.dontWords as string[]).join(", ")}`);
+  if (bk.ctaStyle) lines.push(`CTA-stil: ${bk.ctaStyle}`);
+  if (bk.hashtagStyle) lines.push(`Hashtag-stil: ${bk.hashtagStyle}`);
+  if (bk.emojiPolicy) lines.push(`Emoji-politik: ${bk.emojiPolicy}`);
+  if (Array.isArray(bk.examples) && bk.examples.length)
+    lines.push(
+      `Eksempel-posts:\n${(bk.examples as string[])
+        .slice(0, 2)
+        .map((e) => `"${e}"`)
+        .join("\n")}`
+    );
+  return lines.join("\n") || "Ingen brand kit detaljer.";
+}
+
+function patternsBlock(patterns: WinningPatternSummary[]): string {
+  if (!patterns.length)
+    return "Ingen performance-data endnu – byg på generelle best practices.";
+  return patterns
+    .slice(0, 3)
+    .map(
+      (p) =>
+        `• ${p.hookType}: ${p.avgEngRate} avg. engagement (${p.avgImpressions} visn. i snit)` +
+        (p.exampleTexts?.[0]
+          ? `\n  Eksempel: "${p.exampleTexts[0].slice(0, 180)}…"`
+          : "")
+    )
+    .join("\n\n");
+}
+
+function docsBlock(
+  sources: { title: string; extractedText: string }[],
+  query: string,
+  maxChars = 500
+): string {
+  if (!sources.length) return "Ingen vidensbase uploadet endnu.";
+  const keywords = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 3);
+  const scored = sources
+    .map((s) => {
+      const combined = `${s.title} ${s.extractedText}`.toLowerCase();
+      const score = keywords.filter((kw) => combined.includes(kw)).length;
+      return { s, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
+  return scored
+    .map(({ s }) => `[${s.title}]:\n${s.extractedText.slice(0, maxChars)}`)
+    .join("\n\n");
+}
+
+async function callOpenAI(
+  systemPrompt: string,
+  userPrompt: string
+): Promise<unknown | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return null;
+
+  try {
+    const { default: OpenAI } = await import("openai");
+    const client = new OpenAI({ apiKey });
+
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 3000,
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    if (!content) return null;
+    return JSON.parse(content);
+  } catch (err) {
+    console.error("[AI] OpenAI call failed:", err);
+    return null;
+  }
+}
+
+// ─── generateWeeklyPlan ───────────────────────────────────────────────────────
+
+/**
+ * Generates a weekly content plan.
+ * Accepts either the new workspaceSlug-based interface or the legacy one.
+ */
+export async function generateWeeklyPlan(
+  input: WeeklyPlanInput | WeeklyPlanLegacyInput
+): Promise<PostDraft[]> {
+  if ("workspaceSlug" in input) {
+    return _generateWeeklyPlanNew(input as WeeklyPlanInput);
+  }
+  return _generateWeeklyPlanLegacy(input as WeeklyPlanLegacyInput);
+}
+
+async function _generateWeeklyPlanNew(input: WeeklyPlanInput): Promise<PostDraft[]> {
+  const ctx = await fetchWorkspaceContext(input.workspaceSlug);
+  const startDate = new Date(input.startDate ?? Date.now());
+  const themes = input.themes?.length
+    ? input.themes
+    : ["thought leadership", "case study", "tips & tricks"];
+
+  const systemPrompt = `Du er en ekspert LinkedIn content-strateg for B2B-virksomheder.
+Svar KUN med valid JSON. Ingen markdown, ingen forklaringstekst.
+Brug UDELUKKENDE data fra brugerens egne materialer.
+Brug IKKE eksterne statistikker du ikke kan belægge.`;
+
+  const userPrompt = `Generér ${input.cadence} LinkedIn-post-idéer til næste uge (start: ${startDate.toISOString().slice(0, 10)}).
+
+BRAND KIT:
+${brandKitBlock(ctx.brandKit as Record<string, unknown> | null)}
+
+TOP-PERFORMENDE MØNSTRE (lær af disse):
+${patternsBlock(ctx.patterns)}
+
+TEMAER:
+${themes.join(", ")}
+
+VIDENSBASE:
+${docsBlock(ctx.contentSources, themes.join(" "), 400)}
+
+Svar med JSON:
+{
+  "drafts": [
+    {
+      "title": "string",
+      "postIdea": "2-3 sætninger om post-konceptet",
+      "format": "TEXT|IMAGE|VIDEO|CAROUSEL|POLL",
+      "suggestedDay": "ISO dato-string",
+      "hook": "stærk åbningslinje der stopper scrollet",
+      "cta": "call to action optimeret til kommentarer",
+      "hashtags": ["#tag"],
+      "rationale": "Kort forklaring på HVORFOR dette post bør virke baseret på performance-mønstrene",
+      "oneLiner": "Citerbar one-liner fra post-konceptet"
+    }
+  ]
+}`;
+
+  const result = await callOpenAI(systemPrompt, userPrompt);
+
+  if (
+    result &&
+    typeof result === "object" &&
+    Array.isArray((result as Record<string, unknown>).drafts)
+  ) {
+    const drafts = (result as { drafts: PostDraft[] }).drafts;
+    return drafts
+      .filter((d) => d.title && d.postIdea && d.format && d.suggestedDay)
+      .slice(0, input.cadence);
+  }
+
+  return _mockWeeklyPlan(input.cadence, themes, startDate, ctx.patterns);
+}
+
+async function _generateWeeklyPlanLegacy(
+  input: WeeklyPlanLegacyInput
+): Promise<PostDraft[]> {
+  const startDate = input.startDate ?? new Date();
+  const themes = input.themes?.length
+    ? input.themes
+    : ["thought leadership", "case study", "tips & tricks"];
+  return _mockWeeklyPlan(input.cadence, themes, startDate, input.winningPatterns ?? []);
+}
+
+// ─── generatePostSuggestions ──────────────────────────────────────────────────
+
+/**
+ * Generates 3 post-copy variations for a given concept, with rationale,
+ * one-liner and asset recommendations.
+ */
+export async function generatePostSuggestions(
+  input: PostSuggestionsInput
+): Promise<PostSuggestion[]> {
+  const ctx = await fetchWorkspaceContext(input.workspaceSlug);
+
+  const assetMeta = ctx.assets
+    .slice(0, 30)
+    .map(
+      (a) =>
+        `${a.id} | ${a.filename} | type:${a.type} | tags:${a.tags.join(",")}`
+    )
+    .join("\n");
+
+  const systemPrompt = `Du er en ekspert LinkedIn copywriter for B2B-virksomheder.
+Svar KUN med valid JSON.
+Brug IKKE unverificerbare statistikker. Basér alt på brugerens egne data.
+Skriv på dansk medmindre brand kit angiver andet.`;
+
+  const userPrompt = `Skriv 3 LinkedIn-post-variationer til dette koncept:
+"${input.postIdea}"
+
+BRAND KIT:
+${brandKitBlock(ctx.brandKit as Record<string, unknown> | null)}
+
+TOP-PERFORMENDE MØNSTRE:
+${patternsBlock(ctx.patterns)}
+
+VIDENSBASE:
+${docsBlock(ctx.contentSources, input.postIdea, 500)}
+
+TILGÆNGELIGE ASSETS (id | filnavn | type | tags):
+${assetMeta || "Ingen assets uploadet endnu."}
+
+Svar med JSON:
+{
+  "suggestions": [
+    {
+      "hook": "stærk åbningslinje",
+      "bodyText": "fuldt post-indhold med linjeskift",
+      "cta": "CTA optimeret til kommentarer",
+      "hashtags": ["#tag"],
+      "rationale": "HVORFOR dette virker ud fra dine data",
+      "oneLiner": "Citerbar one-liner",
+      "recommendedAssets": [
+        { "assetId": "id fra asset-listen", "reason": "kort begrundelse" }
+      ],
+      "visualConcepts": ["beskriv visuelt koncept hvis ingen assets passer"]
+    }
+  ]
+}`;
+
+  const result = await callOpenAI(systemPrompt, userPrompt);
+
+  if (
+    result &&
+    typeof result === "object" &&
+    Array.isArray((result as Record<string, unknown>).suggestions)
+  ) {
+    return (result as { suggestions: PostSuggestion[] }).suggestions.slice(0, 3);
+  }
+
+  return _mockPostSuggestions(input.postIdea, ctx.patterns, ctx.assets);
+}
+
+// ─── generatePostCopy (legacy) ────────────────────────────────────────────────
+
+export async function generatePostCopy(input: PostCopyInput): Promise<PostCopy> {
+  const topPattern = input.winningPatterns?.[0];
+  const brandKeywords =
+    (input.brandKit.doWords as string[]) ?? ["indsigt", "vækst", "resultater"];
+  const tone = (input.brandKit.toneOfVoice as string) ?? "professionel og direkte";
+  const hookStyle = topPattern
+    ? `(Brug "${topPattern.hookType}"-format – ${topPattern.avgEngRate} eng. rate)`
+    : "";
+  const exampleNote = topPattern?.exampleTexts?.[0]
+    ? `\n\nRef: "${topPattern.exampleTexts[0].slice(0, 150)}…"`
+    : "";
+
+  return {
+    hook: `${MOCK_HOOKS[Math.floor(Math.random() * MOCK_HOOKS.length)]} ${hookStyle}`.trim(),
+    bodyText:
+      `${input.postIdea}\n\n${brandKeywords[0]}-tilgang:\n\n` +
+      `✅ Første indsigt\n✅ ${brandKeywords[1] ?? "Vækst"}-observation\n✅ Konkret anbefaling\n\n` +
+      `[Tilpas til "${tone}"-tone]` +
+      exampleNote,
+    cta:
+      (input.brandKit.ctaStyle as string) ||
+      "Hvad er din erfaring? Del i kommentarerne 👇",
+    hashtags: ["#LinkedIn", "#B2BMarketing", "#ContentStrategy", "#Vækst"],
+  };
+}
+
+// ─── matchAssetsToPost ────────────────────────────────────────────────────────
+
+export async function matchAssetsToPost(input: AssetMatchInput): Promise<string[]> {
+  const keywords = input.postIdea
+    .toLowerCase()
+    .split(/[\s,.\-!?]+/)
+    .filter((w) => w.length > 3);
+
+  const scored = input.assets
+    .map((asset) => {
+      const tags = (asset.tags ?? []).map((t: string) => t.toLowerCase());
+      const nameParts = (asset.filename ?? "")
+        .toLowerCase()
+        .replace(/\.[^.]+$/, "")
+        .split(/[-_\s]+/);
+      const haystack = [...tags, ...nameParts];
+      const score = keywords.filter((kw) =>
+        haystack.some((h) => h.includes(kw) || kw.includes(h))
+      ).length;
+      return { id: asset.id!, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return scored.slice(0, 6).map((a) => a.id);
+}
+
+// ─── Mock fallbacks ───────────────────────────────────────────────────────────
 
 const MOCK_HOOKS = [
   "De fleste virksomheder gør dette forkert – og mister leads dagligt.",
@@ -68,213 +430,154 @@ const MOCK_HOOKS = [
   "Hemmeligheden bag de bedste B2B-profiler på LinkedIn.",
   "Tal vi ikke snakker om i branchen – men burde.",
   "Hvad sker der når du ignorerer LinkedIn-algoritmen? Det her.",
-  "3 minutter. Det er hvad det tager at skrive en viral LinkedIn-post.",
-];
-
-const MOCK_FORMATS: PostDraft["format"][] = [
-  "TEXT",
-  "IMAGE",
-  "CAROUSEL",
-  "VIDEO",
-  "POLL",
+  "3 minutter. Det er hvad det tager at skrive en stærk LinkedIn-post.",
 ];
 
 const MOCK_IDEAS = [
   {
     title: "Bag om scenen: Vores arbejdsproces",
     postIdea:
-      "Del et ærligt kig bag kulisserne på hvordan teamet arbejder. Vis de rigtige mennesker, ikke den polerede facade.",
+      "Del et ærligt kig bag kulisserne på teamets arbejde. Vis de rigtige mennesker – ikke den polerede facade.",
     format: "IMAGE" as const,
   },
   {
     title: "Kundecase: Konkrete resultater",
     postIdea:
-      "Præsenter en anonym kundecase med specifikke tal og resultater. Fokuser på transformationen, ikke processen.",
+      "Præsenter en anonym kundecase med specifikke tal. Fokuser på transformationen, ikke processen.",
     format: "CAROUSEL" as const,
   },
   {
     title: "Industri-indsigt: Det ingen taler om",
     postIdea:
-      "Del en kontroversiel holdning til en aktuel tendens i branchen. Bak den op med data eller personlig erfaring.",
+      "Del en kontroversiel holdning til en aktuel branchetendens. Bak den op med erfaring.",
     format: "TEXT" as const,
   },
   {
     title: "Quick tip: Spar tid med dette trick",
     postIdea:
-      "Et actionabelt tip din ICP kan bruge med det samme. Gerne noget overraskende simpelt der giver stor effekt.",
+      "Et actionabelt tip din ICP kan bruge med det samme. Overraskende simpelt – stor effekt.",
     format: "TEXT" as const,
   },
   {
     title: "Fejl vi lavede – og hvad vi lærte",
     postIdea:
-      "Vær sårbar og ærlig om en fejl. Folk engagerer sig mere på autentisk fejl-indhold end på successtories.",
+      "Vær sårbar om en fejl. Autentisk fejl-indhold driver mere engagement end successtories.",
     format: "TEXT" as const,
   },
   {
     title: "Webinar/Event: Tilmeld dig",
     postIdea:
-      "Annoncér et kommende event eller webinar. Fokuser på den konkrete værdi deltageren får, ikke eventet selv.",
+      "Annoncér et kommende event. Fokuser på den konkrete værdi deltageren får.",
     format: "VIDEO" as const,
   },
   {
     title: "Meningsmåling: Hvad mener din ICP?",
     postIdea:
-      "Stil et spørgsmål der er relevant for din ICP og lad dem stemme. Følg op med indsigter i kommentarerne.",
+      "Stil et relevant spørgsmål og lad dem stemme. Følg op med indsigter i kommentarerne.",
     format: "POLL" as const,
   },
 ];
 
-// ─── Service Functions ────────────────────────────────────────────────────────
-
-/**
- * Genererer en ugentlig indholdplan baseret på brand kit og kadence.
- *
- * Bruger winning patterns (fra CSV-import) til at prioritere de formater
- * der historisk performer bedst i workspacet.
- *
- * TODO (production): Erstat med LLM-kald der bruger brandKit + patterns +
- * eksempel-tekster til at generere kontekst-bevidste forslag.
- */
-export async function generateWeeklyPlan(
-  input: WeeklyPlanInput
-): Promise<PostDraft[]> {
-  // Simuler async AI-kald
-  await new Promise((r) => setTimeout(r, 500));
-
-  const startDate = input.startDate ?? new Date();
+function _mockWeeklyPlan(
+  cadence: number,
+  themes: string[],
+  startDate: Date,
+  patterns: WinningPatternSummary[]
+): PostDraft[] {
+  const topHookType = patterns[0]?.hookType ?? "";
   const drafts: PostDraft[] = [];
+  const spacing = Math.floor(7 / cadence);
 
-  const themes =
-    input.themes && input.themes.length > 0
-      ? input.themes
-      : ["thought leadership", "case study", "tips & tricks"];
+  for (let i = 0; i < cadence; i++) {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + i * spacing);
+    if (date.getDay() === 0) date.setDate(date.getDate() + 1);
+    if (date.getDay() === 6) date.setDate(date.getDate() + 2);
 
-  // Winning patterns context – bruges i produktion til LLM-prompt
-  const patternContext = input.winningPatterns?.length
-    ? `\n\nBedst performende formater i dit workspace:\n${input.winningPatterns
-        .slice(0, 3)
-        .map(
-          (p) =>
-            `- ${p.hookType}: ${p.avgEngRate} eng. rate (${p.avgImpressions} visn. i snit)`
-        )
-        .join("\n")}`
-    : "";
-
-  // Prioriter formater baseret på winning patterns
-  const topHookType = input.winningPatterns?.[0]?.hookType ?? "";
-
-  // Fordel posts jævnt over ugen
-  const daysInWeek = 7;
-  const spacing = Math.floor(daysInWeek / input.cadence);
-
-  for (let i = 0; i < input.cadence; i++) {
-    const dayOffset = i * spacing;
-    const suggestedDate = new Date(startDate);
-    suggestedDate.setDate(suggestedDate.getDate() + dayOffset);
-
-    // Skip weekender (lørdag = 6, søndag = 0)
-    if (suggestedDate.getDay() === 0) suggestedDate.setDate(suggestedDate.getDate() + 1);
-    if (suggestedDate.getDay() === 6) suggestedDate.setDate(suggestedDate.getDate() + 2);
-
-    const ideaIndex = i % MOCK_IDEAS.length;
-    const idea = MOCK_IDEAS[ideaIndex];
+    const idea = MOCK_IDEAS[i % MOCK_IDEAS.length];
     const theme = themes[i % themes.length];
-
-    // Lad første post matche top-performing format hvis tilgængeligt
-    const patternNote =
-      i === 0 && topHookType
-        ? ` [Anbefalet format baseret på dine data: ${topHookType}]`
-        : "";
+    const patternLabel =
+      i === 0 && topHookType ? ` [Top format: ${topHookType}]` : "";
 
     drafts.push({
-      title: `[${theme}] ${idea.title}${patternNote}`,
-      postIdea: idea.postIdea + patternContext,
+      title: `[${theme}] ${idea.title}${patternLabel}`,
+      postIdea: idea.postIdea,
       format: idea.format,
-      suggestedDay: suggestedDate.toISOString(),
+      suggestedDay: date.toISOString(),
       hook: MOCK_HOOKS[i % MOCK_HOOKS.length],
+      cta: "Hvad er din erfaring? Del i kommentarerne 👇",
       hashtags: ["#LinkedIn", "#B2BMarketing", "#ContentMarketing"],
+      rationale:
+        patterns.length > 0
+          ? `Baseret på dine top-performende posts i "${patterns[0].hookType}"-format (${patterns[0].avgEngRate} eng. rate).`
+          : "Generelt best-practice LinkedIn-format for B2B.",
+      oneLiner: MOCK_HOOKS[i % MOCK_HOOKS.length].split("–")[0].trim(),
     });
   }
-
   return drafts;
 }
 
-/**
- * Genererer post-tekst (hook, body, CTA, hashtags) baseret på brand kit, idé og winning patterns.
- *
- * TODO (production): Erstat med LLM-prompt der bruger:
- *   - brandKit.toneOfVoice, doWords, dontWords
- *   - postIdea + selectedAssets
- *   - winningPatterns.exampleTexts (3-5 konkrete eksempler fra top posts)
- *   - winningPatterns features (foretrukken hook-type, længde, struktur)
- */
-export async function generatePostCopy(input: PostCopyInput): Promise<PostCopy> {
-  // Simuler async AI-kald
-  await new Promise((r) => setTimeout(r, 700));
-
-  const brandKeywords = input.brandKit.doWords ?? ["indsigt", "vækst", "resultater"];
-  const tone = input.brandKit.toneOfVoice ?? "professionel og direkte";
-
-  // Brug top winning pattern til at farve hook-stilen
-  const topPattern = input.winningPatterns?.[0];
-  const hookStyle = topPattern
-    ? `(Brug "${topPattern.hookType}"-format der performer med ${topPattern.avgEngRate} eng. rate)`
-    : "";
-
-  // Mock: Generer simpel struktur baseret på input
-  const hook = `${MOCK_HOOKS[Math.floor(Math.random() * MOCK_HOOKS.length)]} ${hookStyle}`.trim();
-
-  // Inkluder eksempel fra winning patterns i body (vises som reference i produktion)
-  const exampleNote =
-    topPattern?.exampleTexts?.[0]
-      ? `\n\n💡 [Reference fra top-performing post]:\n"${topPattern.exampleTexts[0].slice(0, 150)}…"`
-      : "";
-
-  const bodyText =
-    `${input.postIdea}\n\nBaseret på vores erfaring og ${brandKeywords[0]}-tilgang:\n\n` +
-    `✅ Første indsigt relateret til emnet\n` +
-    `✅ Anden ${brandKeywords[1]}-drevet observation\n` +
-    `✅ Tredje konkrete anbefaling\n\n` +
-    `[Uddyb med specifik data og eksempler der passer til '${tone}'-tonen]` +
-    exampleNote;
-
-  const cta =
-    input.brandKit.ctaStyle ||
-    "Hvad er din erfaring? Del dine tanker i kommentarerne 👇";
-
-  const hashtags = ["#LinkedIn", "#B2BMarketing", "#ContentStrategy", "#Vækst"].slice(0, 4);
-
-  return { hook, bodyText, cta, hashtags };
-}
-
-/**
- * Matcher assets til en post baseret på tag-overlap med postIdea keywords.
- *
- * TODO (production): Erstat med embedding-baseret semantic search eller
- * LLM-rangering baseret på visuel og tekstuel relevans.
- */
-export async function matchAssetsToPost(
-  input: AssetMatchInput
-): Promise<string[]> {
-  // Simuler async AI-kald
-  await new Promise((r) => setTimeout(r, 300));
-
-  // Ekstraher keywords fra postIdea
-  const keywords = input.postIdea
+function _mockPostSuggestions(
+  postIdea: string,
+  patterns: WinningPatternSummary[],
+  assets: { id: string; filename: string; tags: string[]; type: string }[]
+): PostSuggestion[] {
+  const topPattern = patterns[0];
+  const keywords = postIdea
     .toLowerCase()
     .split(/\s+/)
     .filter((w) => w.length > 3);
+  const scoredAssets = assets
+    .map((a) => ({
+      ...a,
+      score: a.tags.filter((t) => keywords.some((k) => t.toLowerCase().includes(k))).length,
+    }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 3);
 
-  // Score assets baseret på tag-overlap
-  const scored = input.assets
-    .map((asset) => {
-      const tags = (asset.tags ?? []).map((t: string) => t.toLowerCase());
-      const score = keywords.filter((kw) =>
-        tags.some((tag: string) => tag.includes(kw) || kw.includes(tag))
-      ).length;
-      return { id: asset.id!, score };
-    })
-    .sort((a, b) => b.score - a.score || Math.random() - 0.5); // Random tiebreaker
+  const baseRationale = topPattern
+    ? `${topPattern.hookType}-format performer med ${topPattern.avgEngRate} eng. rate i din profil.`
+    : "Standard B2B best-practice format.";
 
-  return scored.slice(0, 6).map((a) => a.id);
+  return [
+    {
+      hook: MOCK_HOOKS[0],
+      bodyText: `${postIdea}\n\n✅ Første konkrete indsigt\n✅ Anden observation\n✅ Tredje anbefaling`,
+      cta: "Hvad er din erfaring? Skriv i kommentarerne 👇",
+      hashtags: ["#LinkedIn", "#B2BMarketing", "#ContentStrategy"],
+      rationale: baseRationale,
+      oneLiner: MOCK_HOOKS[0].split("–")[0].trim(),
+      recommendedAssets: scoredAssets.map((a) => ({
+        assetId: a.id,
+        reason: `Tags matcher post-tema: ${a.tags.slice(0, 2).join(", ")}`,
+      })),
+      visualConcepts:
+        scoredAssets.length === 0
+          ? ["Billede af team i arbejde", "Infografik med key takeaway"]
+          : [],
+    },
+    {
+      hook: MOCK_HOOKS[2],
+      bodyText: `${postIdea}\n\nDet handler om ét simpelt skift:\n\n→ Fokuser på problemet, ikke løsningen\n→ Vis resultater, ikke processer\n→ Stil spørgsmål, giv ikke svar`,
+      cta: "Hvad har I forsøgt? Kom med i diskussionen 💬",
+      hashtags: ["#LinkedIn", "#Vækst", "#B2BMarketing"],
+      rationale: "Spørgsmål-format driver kommentarer bedre end statement-posts.",
+      oneLiner: MOCK_HOOKS[2].split("–")[0].trim(),
+      recommendedAssets: [],
+      visualConcepts: ["Graf der viser before/after", "Simpelt quote-billede"],
+    },
+    {
+      hook: MOCK_HOOKS[4],
+      bodyText: `${postIdea}\n\n3 ting du kan gøre i dag:\n1. [Første handling]\n2. [Anden handling]\n3. [Tredje handling]\n\nResultat: mere engagement, mere rækkevidde.`,
+      cta: "Gem dette til senere – og del hvad der virker for jer 🔖",
+      hashtags: ["#LinkedInTips", "#ContentMarketing", "#Vækst"],
+      rationale: "Lister og action-steps har historisk høj save-rate.",
+      oneLiner: "3 ting du kan gøre i dag for at forbedre dit LinkedIn-content.",
+      recommendedAssets: scoredAssets.slice(0, 2).map((a) => ({
+        assetId: a.id,
+        reason: `Visuelt relevant: ${a.tags.slice(0, 1).join(", ")}`,
+      })),
+      visualConcepts: scoredAssets.length < 2 ? ["Numereret liste som billede"] : [],
+    },
+  ];
 }

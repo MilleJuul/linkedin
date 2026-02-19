@@ -62,8 +62,9 @@ export default function AssetGrid({
               isSelected && "ring-2 ring-blue-500 ring-offset-1"
             )}
           >
-            {/* Thumbnail */}
-            {asset.thumbnailUrl ? (
+            {/* Thumbnail – only render <Image> for IMAGE type so a video URL
+                stored as thumbnailUrl never breaks the layout. */}
+            {asset.type === "IMAGE" && asset.thumbnailUrl ? (
               <Image
                 src={asset.thumbnailUrl}
                 alt={asset.filename}

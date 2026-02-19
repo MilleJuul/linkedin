@@ -319,6 +319,7 @@ export default function LibraryClient({
         open={showUpload}
         onClose={() => setShowUpload(false)}
         workspaceSlug={workspaceSlug}
+        onUploaded={() => router.refresh()}
       />
 
       <DocumentUploadModal
