@@ -94,7 +94,7 @@ export default function UploadModal({
         const formData = new FormData();
         formData.set("filename", item.file.name);
         formData.set("url", url);
-        formData.set("thumbnailUrl", thumbnailUrl ?? "");
+        if (thumbnailUrl) formData.set("thumbnailUrl", thumbnailUrl);
         formData.set("type", item.type);
         formData.set("tags", item.tags);
         await createAsset(workspaceSlug, formData);
