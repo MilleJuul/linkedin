@@ -1,6 +1,9 @@
 import { put } from "@vercel/blob";
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
+import { writeFile, mkdir } from "fs/promises";
+import { join } from "path";
+import { randomBytes } from "crypto";
 
 export const runtime = "nodejs";
 
@@ -41,13 +44,30 @@ export async function POST(request: Request) {
     );
   }
 
-  const blob = await put(file.name, file, {
-    access: "public",
-    addRandomSuffix: true,
-  });
-
-  // Videos cannot be rendered as image thumbnails – return null so the UI
-  // shows the video-icon placeholder instead of a broken image.
   const isVideo = file.type.startsWith("video/");
-  return NextResponse.json({ url: blob.url, thumbnailUrl: isVideo ? null : blob.url });
+
+  // --- Vercel Blob (production) ---
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    const blob = await put(file.name, file, {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    return NextResponse.json({
+      url: blob.url,
+      thumbnailUrl: isVideo ? null : blob.url,
+    });
+  }
+
+  // --- Local fallback (development without Vercel Blob token) ---
+  const suffix = randomBytes(6).toString("hex");
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const filename = `${suffix}-${safeName}`;
+  const uploadsDir = join(process.cwd(), "public", "uploads");
+
+  await mkdir(uploadsDir, { recursive: true });
+  const buffer = Buffer.from(await file.arrayBuffer());
+  await writeFile(join(uploadsDir, filename), buffer);
+
+  const url = `/uploads/${filename}`;
+  return NextResponse.json({ url, thumbnailUrl: isVideo ? null : url });
 }
